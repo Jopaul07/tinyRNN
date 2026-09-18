@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LSTM shape flow</title>
+<style>
+  :root{
+    --text-primary:#1a1a1a; --text-secondary:#5f5f5a; --text-muted:#8a8a84; --text-accent:#185fa5;
+    --border:#e2e0d8; --border-strong:#c9c7bd; --surface-2:#ffffff; --surface-1:#f7f6f2;
+  }
+  body{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--surface-1);
+       color:var(--text-primary);margin:0;padding:24px 16px;}
+  .card{max-width:640px;margin:0 auto;background:var(--surface-2);border:0.5px solid var(--border);
+        border-radius:12px;padding:20px 24px 28px;}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;}
+  .ctrl{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .ctrl label{font-size:13px;color:var(--text-secondary);width:110px;flex-shrink:0}
+  .ctrl input{flex:1}
+  .ctrl span{font-size:13px;font-weight:600;min-width:28px;text-align:right}
+  .dots{display:flex;gap:6px;justify-content:center;margin:14px 0}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--border-strong)}
+  .dot.on{background:var(--text-accent)}
+  .tbox{border:0.5px solid var(--border-strong);border-radius:8px;padding:10px 14px;text-align:center;min-width:110px}
+  .tname{font-size:12px;color:var(--text-secondary)}
+  .tshape{font-size:14px;font-weight:600;margin-top:2px}
+  .arrow{font-size:16px;color:var(--text-muted);align-self:center}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:10px 0}
+  .navbtn{padding:6px 16px;border:0.5px solid var(--border-strong);border-radius:8px;background:var(--surface-2);
+          cursor:pointer;font-size:13px;}
+  .navbtn:hover{background:var(--surface-1)}
+  h2{font-size:18px;font-weight:600;margin:0 0 16px}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>LSTM shape flow (B, T, C)</h2>
+<h2 class="sr-only">Interactive walkthrough of how tensor shapes B, T, C transform through each stage of an LSTM, with adjustable batch size, sequence length, input size, hidden size and projection size.</h2>
+
+<div class="row" style="justify-content:space-between;margin-bottom:14px">
+  <div class="ctrl" style="flex:1;min-width:150px"><label>Batch B</label><input type="range" id="B" min="1" max="8" value="4" step="1"><span id="Bv">4</span></div>
+  <div class="ctrl" style="flex:1;min-width:150px"><label>Steps T</label><input type="range" id="T" min="1" max="10" value="5" step="1"><span id="Tv">5</span></div>
+</div>
+<div class="row" style="justify-content:space-between;margin-bottom:14px">
+  <div class="ctrl" style="flex:1;min-width:150px"><label>input_size</label><input type="range" id="Cin" min="1" max="32" value="3" step="1"><span id="Cinv">3</span></div>
+  <div class="ctrl" style="flex:1;min-width:150px"><label>hidden_size</label><input type="range" id="H" min="2" max="32" value="16" step="1"><span id="Hv">16</span></div>
+</div>
+<div class="ctrl" style="margin-bottom:4px"><label>proj_size</label><input type="range" id="P" min="0" max="31" value="8" step="1"><span id="Pv">8</span></div>
+<div style="font-size:11px;color:var(--text-muted);margin:0 0 16px 122px">0 = off (real_hidden_size = hidden_size)</div>
+
+<div id="stage" style="min-height:190px"></div>
+<div class="dots" id="dots"></div>
+<div class="row">
+  <button class="navbtn" onclick="go(-1)">Back</button>
+  <span id="stitle" style="font-size:13px;font-weight:600;min-width:180px;text-align:center"></span>
+  <button class="navbtn" onclick="go(1)">Next</button>
+</div>
+<p id="sdesc" style="font-size:13px;color:var(--text-secondary);line-height:1.6;text-align:center;max-width:520px;margin:12px auto 0"></p>
+</div>
+
+<script>
+let idx = 0;
+function state(){
+  return {
+    B:+document.getElementById('B').value, T:+document.getElementById('T').value,
+    Cin:+document.getElementById('Cin').value, H:+document.getElementById('H').value,
+    P:+document.getElementById('P').value
+  };
+}
+function box(name, shape){ return `<div class="tbox"><div class="tname">${name}</div><div class="tshape">${shape}</div></div>`; }
+function arrow(sym){ return `<div class="arrow">${sym||'\u2192'}</div>`; }
+
+function render(){
+  const s = state();
+  document.getElementById('Bv').textContent = s.B;
+  document.getElementById('Tv').textContent = s.T;
+  document.getElementById('Cinv').textContent = s.Cin;
+  document.getElementById('Hv').textContent = s.H;
+  document.getElementById('Pv').textContent = s.P;
+  const R = s.P > 0 ? s.P : s.H;
+
+  const stages = [
+    { t:"1. Input tensor", d:"The raw input to the LSTM. B = batch size (how many independent sequences), T = number of timesteps, C = input_size (features per timestep).",
+      html: `<div class="row">${box('x', `(${s.B}, ${s.T}, ${s.Cin})`)}</div>` },
+    { t:"2. Slice one timestep", d:`Inside the loop, C is stripped out of the T axis: x[:, t, :] drops T entirely, leaving (B, C). h_{t-1} and c_{t-1} carry over from the previous step, both shaped by hidden_size.`,
+      html: `<div class="row">${box('x_t','('+s.B+', '+s.Cin+')')}${box('h_{t-1}','('+s.B+', '+R+')')}${box('c_{t-1}','('+s.B+', '+s.H+')')}</div>` },
+    { t:"3. Gate pre-activation", d:`Rule: for x @ W, W's first dim must equal x's last dim, and W's second dim sets the output's last dim. So Wx is (C_in, H) and Wh is (real_hidden_size, H) -- both project up to H so they can be summed.`,
+      html: `<div class="row">${box('x_t @ Wf_x','('+s.B+', '+s.Cin+') @ ('+s.Cin+', '+s.H+') = ('+s.B+', '+s.H+')')}${arrow('+')}${box('h_{t-1} @ Wf_h','('+s.B+', '+R+') @ ('+R+', '+s.H+') = ('+s.B+', '+s.H+')')}</div>
+      <div class="row">${arrow('+')}${box('bf','('+s.H+',)')}${arrow('\u2192')}${box('f_t = \u03c3(...)','('+s.B+', '+s.H+')')}</div>
+      <p style="font-size:12px;color:var(--text-muted);text-align:center;margin-top:8px">same shapes for i_t, g_t, o_t -- 4 gates, all (B, hidden_size)</p>` },
+    { t:"4. New cell state", d:"Elementwise ops (*, +) never change shape -- c_t stays (B, hidden_size), same as c_{t-1} and every gate.",
+      html: `<div class="row">${box('f_t\u00b7c_{t-1}','('+s.B+', '+s.H+')')}${arrow('+')}${box('i_t\u00b7g_t','('+s.B+', '+s.H+')')}${arrow('=')}${box('c_t','('+s.B+', '+s.H+')')}</div>` },
+    { t:"5. New hidden (pre-projection)", d:"o_t * tanh(c_t) is elementwise too, so the result stays at full hidden_size -- before any projection is applied.",
+      html: `<div class="row">${box('o_t \u00b7 tanh(c_t)','('+s.B+', '+s.H+')')}</div>` },
+    { t:"6. Optional projection", d: s.P>0 ? `Whr is (hidden_size, proj_size) -- it maps the last dim from H down to P. This projected h_t is what gets returned and fed back as next step's h_{t-1}.` : `proj_size = 0, so this step is skipped -- h_t passes through unchanged at hidden_size.`,
+      html: s.P>0 ? `<div class="row">${box('h_full @ Whr','('+s.B+', '+s.H+') @ ('+s.H+', '+s.P+') = ('+s.B+', '+s.P+')')}</div>` : `<div class="row">${box('h_t = h_full','('+s.B+', '+s.H+')')}</div>` },
+    { t:"7. Stack across T", d:"After the loop runs T times, every h_t gets stacked along a new axis -- this is where T reappears in the output.",
+      html: `<div class="row">${box('outs = stack(h_1..h_T)','('+s.B+', '+s.T+', '+R+')')}</div>` },
+    { t:"8. Output head", d:"Approach 1 (all timesteps) keeps T and projects every step's C at once. Approach 2 (final only) uses just h_final, dropping T before the projection.",
+      html: `<div class="row">${box('outs @ W_out','('+s.B+', '+s.T+', '+R+') @ ('+R+', 1) = ('+s.B+', '+s.T+', 1)')}</div>
+      <p style="font-size:12px;color:var(--text-muted);text-align:center;margin:6px 0">approach 1 -- all timesteps</p>
+      <div class="row">${box('h_final @ W_out','('+s.B+', '+R+') @ ('+R+', 1) = ('+s.B+', 1)')}</div>
+      <p style="font-size:12px;color:var(--text-muted);text-align:center;margin:6px 0 0">approach 2 -- final timestep only</p>` },
+  ];
+
+  const st = stages[idx];
+  document.getElementById('stitle').textContent = st.t;
+  document.getElementById('sdesc').textContent = st.d;
+  document.getElementById('stage').innerHTML = st.html;
+  document.getElementById('dots').innerHTML = stages.map((_,i)=>`<div class="dot ${i===idx?'on':''}"></div>`).join('');
+}
+function go(delta){
+  const n = 8;
+  idx = (idx + delta + n) % n;
+  render();
+}
+function init(){
+  ['B','T','Cin','H','P'].forEach(id => document.getElementById(id).addEventListener('input', render));
+  render();
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Batches, windows and epochs</title>
+<style>
+  :root{
+    --text-primary:#1a1a1a; --text-secondary:#5f5f5a; --text-muted:#8a8a84; --text-accent:#185fa5;
+    --border:#e2e0d8; --border-strong:#c9c7bd; --surface-2:#ffffff; --surface-1:#f7f6f2; --bg-accent:#e6f1fb;
+  }
+  body{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;background:var(--surface-1);
+       color:var(--text-primary);margin:0;padding:24px 16px;}
+  .card{max-width:640px;margin:0 auto;background:var(--surface-2);border:0.5px solid var(--border);
+        border-radius:12px;padding:20px 24px 28px;}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;}
+  h2{font-size:18px;font-weight:600;margin:0 0 16px}
+  .cell{width:26px;height:26px;border-radius:6px;border:0.5px solid var(--border-strong);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text-secondary);flex-shrink:0}
+  .cell.on{background:var(--bg-accent);border-color:var(--text-accent);color:var(--text-accent);font-weight:600}
+  .strip{display:flex;gap:4px;justify-content:center;flex-wrap:wrap;margin:14px 0}
+  .dots{display:flex;gap:6px;justify-content:center;margin:14px 0}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--border-strong)}
+  .dot.on{background:var(--text-accent)}
+  .navbtn{padding:6px 16px;border:0.5px solid var(--border-strong);border-radius:8px;background:var(--surface-2);
+          cursor:pointer;font-size:13px;}
+  .navbtn:hover{background:var(--surface-1)}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;margin:10px 0}
+  .wbox{border:0.5px solid var(--border-strong);border-radius:8px;padding:6px 10px;font-size:12px;color:var(--text-secondary)}
+  .wbox.hi{border-color:var(--text-accent);color:var(--text-accent);font-weight:600}
+  .batch{border:0.5px solid var(--border-strong);border-radius:8px;padding:10px;min-width:80px;text-align:center}
+  .batch .t{font-size:12px;color:var(--text-secondary);margin-bottom:6px}
+</style>
+</head>
+<body>
+<div class="card">
+<h2>Batches, windows and epochs</h2>
+<h2 class="sr-only">Interactive walkthrough showing how a sliding window extracts overlapping sequences from a time series, how those windows are grouped into batches, and how one epoch is one full pass through all batches.</h2>
+
+<div id="stage" style="min-height:210px"></div>
+<div class="dots" id="dots"></div>
+<div class="row">
+  <button class="navbtn" onclick="go(-1)">Back</button>
+  <span id="stitle" style="font-size:13px;font-weight:600;min-width:190px;text-align:center"></span>
+  <button class="navbtn" onclick="go(1)">Next</button>
+</div>
+<p id="sdesc" style="font-size:13px;color:var(--text-secondary);line-height:1.6;text-align:center;max-width:520px;margin:12px auto 0"></p>
+</div>
+
+<script>
+const N = 16, block = 5, batchSize = 3;
+const nWindows = N - block;
+let idx = 0;
+let winPos = 0;
+
+function cellsRow(highlightFrom, highlightTo){
+  let html = '<div class="strip">';
+  for(let i=0;i<N;i++){
+    const on = i>=highlightFrom && i<=highlightTo;
+    html += `<div class="cell ${on?'on':''}">${i}</div>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+function render(){
+  const stages = [
+    { t:"1. Your time series", d:"A single array of daily returns, 16 days long in this example. In your data this is train_data or val_data.",
+      html: cellsRow(-1,-1) },
+    { t:"2. Sliding window (stride 1)", d:`One window = block_size (${block}) consecutive days. Each click moves the window forward by 1 day -- consecutive windows overlap in ${block-1} of ${block} days. This is what creates ${nWindows} windows from just ${N} days, instead of only ${Math.floor(N/block)} if windows didn't overlap.`,
+      html: cellsRow(winPos, winPos+block-1) + `<div class="row"><button class="navbtn" onclick="slide()">Slide window \u2192</button><span style="font-size:12px;color:var(--text-secondary)">window ${winPos} of ${nWindows-1}</span></div>` },
+    { t:"3. All windows, one epoch", d:`Sliding all the way across gives ${nWindows} overlapping windows total -- these are ALL the training examples available this epoch, before any batching happens.`,
+      html: `<div class="row" style="max-width:460px;margin:0 auto">${Array.from({length:nWindows},(_,i)=>`<div class="wbox">w${i}</div>`).join('')}</div>` },
+    { t:"4. Shuffle, then batch", d:`The ${nWindows} windows get shuffled into random order, then chopped into groups of batch_size (${batchSize}). Each group is one batch -- what get_batch / make_epoch_batches hands to the LSTM in a single forward pass.`,
+      html: (()=>{ const order=[7,2,9,0,5,3,10,1,6,4,8].slice(0,nWindows);
+        let out='<div class="row">';
+        for(let b=0;b<Math.ceil(nWindows/batchSize);b++){
+          const group = order.slice(b*batchSize,(b+1)*batchSize);
+          out += `<div class="batch"><div class="t">batch ${b}</div>${group.map(w=>`<div class="wbox hi">w${w}</div>`).join('')}</div>`;
+        }
+        out += '</div>'; return out; })() },
+    { t:"5. One epoch", d:"An epoch = looping through every batch above exactly once. Next epoch reshuffles the window order and re-batches -- same windows, different groupings.",
+      html: `<div class="row">${Array.from({length:Math.ceil(nWindows/batchSize)},(_,i)=>`<div class="wbox hi">batch ${i}</div>`).join('<span style="color:var(--text-muted)">\u2192</span>')}</div>
+      <p style="font-size:12px;color:var(--text-muted);text-align:center;margin-top:10px">\u21bb next epoch: reshuffle, re-batch, repeat</p>` },
+  ];
+  const st = stages[idx];
+  document.getElementById('stitle').textContent = st.t;
+  document.getElementById('sdesc').textContent = st.d;
+  document.getElementById('stage').innerHTML = st.html;
+  document.getElementById('dots').innerHTML = stages.map((_,i)=>`<div class="dot ${i===idx?'on':''}"></div>`).join('');
+}
+function go(delta){
+  idx = (idx + delta + 5) % 5;
+  render();
+}
+function slide(){
+  winPos = (winPos + 1) % nWindows;
+  render();
+}
+function init(){ render(); }
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
+</script>
+</body>
+</html>
